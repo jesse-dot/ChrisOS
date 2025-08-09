@@ -1,5 +1,5 @@
 # ChrisOS - A simple, text-based operating system simulation in Python.
-# Version 8.3 - Re-added Weather Command
+# Version 1.0
 
 import datetime
 import time
@@ -40,7 +40,7 @@ class ChrisOS:
     This class encapsulates the functionality of ChrisOS, including
     the command loop, command handling, and a real file system integration.
     """
-    VERSION = "8.3"
+    VERSION = "1.0 (Stable)"
 
     def __init__(self, root_folder="chris_os_root"):
         """Initializes the OS, setting up paths and checking for first-time setup."""
