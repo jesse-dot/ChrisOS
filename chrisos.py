@@ -1,5 +1,4 @@
-# ChrisOS - A simple, text-based operating system simulation in Python.
-# Version 2.0 (In Development)
+# ChrisOS 2.0
 
 import datetime
 import time
@@ -37,7 +36,7 @@ class ChrisOS:
     This class encapsulates the functionality of ChrisOS, including
     the command loop, command handling, and a real file system integration.
     """
-    VERSION = "2.0 (DEV BUILD)"
+    VERSION = "2.0 (DEV)"
     STORAGE_LIMIT = 1 * 1024 * 1024 * 1024 # 1 GB
 
     def __init__(self, root_folder="chris_os_root"):
@@ -170,6 +169,10 @@ class ChrisOS:
         print("  rm [file]           - Deletes a file.")
         print("  rmdir [dir]         - Deletes an empty directory.")
         print("  find [name]         - Searches for a file in the current directory.")
+        print("\n  --- Version Control ---")
+        print("  git init            - Initializes a new repository in the current directory.")
+        print("  git commit -m \"msg\" - Creates a snapshot (commit) of the repository.")
+        print("  git log             - Shows the commit history.")
         print("\n  --- Networking ---")
         print("  ts-status           - Shows the status of your Tailscale network (tailnet).")
         print("  ping [hostname]     - Pings a device on your tailnet or the internet.")
@@ -531,6 +534,80 @@ class ChrisOS:
                                 result_path = os.path.join(root, args[0])
                                 print(os.path.relpath(result_path, self.current_path))
                         if not found: print(f"File '{args[0]}' not found.")
+                
+                # --- VERSION CONTROL ---
+                elif command == "git":
+                    if not args:
+                        print("Usage: git [init|commit|log]")
+                        continue
+                    
+                    sub_command = args[0]
+                    git_path = os.path.join(self.current_path, ".chrisgit")
+
+                    if sub_command == "init":
+                        if os.path.exists(git_path):
+                            print("Repository already initialized.")
+                        else:
+                            os.makedirs(git_path)
+                            print(f"Initialized empty ChrisOS repository in {self.get_relative_path()}/.chrisgit")
+                    
+                    elif sub_command == "commit":
+                        if not os.path.exists(git_path):
+                            print("Error: Not a git repository. Run 'git init' first.")
+                            continue
+                        
+                        if len(args) > 2 and args[1] == "-m":
+                            message = " ".join(args[2:]).strip('"')
+                            timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                            commit_name = f"{timestamp}_{message.replace(' ', '_')}"
+                            archive_path = os.path.join(git_path, commit_name)
+                            
+                            # Create a temporary directory to archive from
+                            temp_dir = os.path.join(self.root_path, "temp_archive_dir")
+                            os.makedirs(temp_dir, exist_ok=True)
+                            
+                            # Copy everything except .chrisgit to the temp dir
+                            for item in os.listdir(self.current_path):
+                                s_path = os.path.join(self.current_path, item)
+                                d_path = os.path.join(temp_dir, item)
+                                if item != ".chrisgit":
+                                    if os.path.isdir(s_path):
+                                        shutil.copytree(s_path, d_path)
+                                    else:
+                                        shutil.copy2(s_path, d_path)
+
+                            # Create the archive and clean up
+                            shutil.make_archive(archive_path, 'zip', temp_dir)
+                            shutil.rmtree(temp_dir)
+
+                            print(f"Committed changes: {message}")
+                        else:
+                            print("Usage: git commit -m \"your commit message\"")
+
+                    elif sub_command == "log":
+                        if not os.path.exists(git_path):
+                            print("Error: Not a git repository. Run 'git init' first.")
+                            continue
+                        
+                        commits = sorted(os.listdir(git_path), reverse=True)
+                        if not commits:
+                            print("No commits yet.")
+                        else:
+                            for commit_file in commits:
+                                try:
+                                    parts = os.path.splitext(commit_file)[0].split('_', 1)
+                                    timestamp_str = parts[0]
+                                    message = parts[1].replace('_', ' ')
+                                    dt_object = datetime.datetime.strptime(timestamp_str, "%Y%m%d-%H%M%S")
+                                    print(f"commit {commit_file}")
+                                    print(f"Date:   {dt_object.strftime('%a %b %d %H:%M:%S %Y')}")
+                                    print(f"\n\t{message}\n")
+                                except:
+                                    # Ignore files that don't match the format
+                                    pass
+                    else:
+                        print(f"Error: Unknown git command '{sub_command}'.")
+
 
                 # --- NETWORKING COMMANDS ---
                 elif command == "ts-status":
