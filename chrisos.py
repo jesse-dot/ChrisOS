@@ -1,5 +1,4 @@
-# ChrisOS - A simple, text-based operating system simulation in Python.
-# Version 1.0
+# ChrisOS 2.0
 
 import datetime
 import time
@@ -13,7 +12,6 @@ from urllib.parse import urlparse
 try:
     import asyncio
     from tailscale import Tailscale
-
     TAILSCALE_ENABLED = True
 except ImportError:
     TAILSCALE_ENABLED = False
@@ -21,7 +19,6 @@ except ImportError:
 # Attempt to import the ping3 library for external pings.
 try:
     import ping3
-
     PING3_ENABLED = True
 except ImportError:
     PING3_ENABLED = False
@@ -29,7 +26,6 @@ except ImportError:
 # Attempt to import the requests library for wget and weather.
 try:
     import requests
-
     REQUESTS_ENABLED = True
 except ImportError:
     REQUESTS_ENABLED = False
@@ -40,7 +36,8 @@ class ChrisOS:
     This class encapsulates the functionality of ChrisOS, including
     the command loop, command handling, and a real file system integration.
     """
-    VERSION = "1.0 (Stable)"
+    VERSION = "2.0 (DEV)"
+    STORAGE_LIMIT = 1 * 1024 * 1024 * 1024 # 1 GB
 
     def __init__(self, root_folder="chris_os_root"):
         """Initializes the OS, setting up paths and checking for first-time setup."""
@@ -61,7 +58,7 @@ class ChrisOS:
         self.requires_login = True
         if not os.path.exists(self.root_path):
             self.first_time_setup()
-
+        
         # Load any saved configuration
         self.load_config()
 
@@ -94,20 +91,20 @@ class ChrisOS:
         print("--- ChrisOS First-Time Setup ---")
         username = input("Enter a username for the admin: ").strip()
         password = getpass.getpass("Enter a password for the admin: ")
-
+        
         print(f"\nCreating OS file structure at: {self.root_path}")
         os.makedirs(self.system_path)
         user_home_dir = os.path.join(self.home_path, username)
         os.makedirs(user_home_dir)
-
+        
         with open(self.users_file, "w") as f:
             f.write(f"{username}:{password}\n")
-
+        
         self.user = username
         self.current_path = user_home_dir
         self.requires_login = False
         print(f"\nSetup complete. Welcome, {self.user}!")
-
+        
     def login(self):
         """Handles the user login process."""
         print("--- ChrisOS Login ---")
@@ -128,7 +125,7 @@ class ChrisOS:
         except FileNotFoundError:
             print("Error: users.txt not found. The OS might be corrupted.")
             return False
-
+        
         print("\nInvalid username or password.")
         return False
 
@@ -149,6 +146,7 @@ class ChrisOS:
         print("  sysinfo             - Displays system information.")
         print("  neofetch            - Shows a fancy system summary.")
         print("  history             - Shows command history.")
+        print("  df                  - Shows disk usage information.")
         print("  clear               - Clears the terminal screen.")
         print("  logout              - Logs out the current user.")
         print("  shutdown            - Shuts down ChrisOS.")
@@ -161,6 +159,7 @@ class ChrisOS:
         print("  cd [dir]            - Changes directory ('~' for home).")
         print("  pwd                 - Shows the current working directory.")
         print("  cat [file]          - Displays the content of a file.")
+        print("  echo \"[text]\" > [file] - Writes text to a file.")
         print("  edit [file]         - A simple text editor.")
         print("  grep [pattern] [file] - Searches for a pattern within a file.")
         print("  cp [src] [dest]     - Copies a file.")
@@ -170,6 +169,10 @@ class ChrisOS:
         print("  rm [file]           - Deletes a file.")
         print("  rmdir [dir]         - Deletes an empty directory.")
         print("  find [name]         - Searches for a file in the current directory.")
+        print("\n  --- Version Control ---")
+        print("  git init            - Initializes a new repository in the current directory.")
+        print("  git commit -m \"msg\" - Creates a snapshot (commit) of the repository.")
+        print("  git log             - Shows the commit history.")
         print("\n  --- Networking ---")
         print("  ts-status           - Shows the status of your Tailscale network (tailnet).")
         print("  ping [hostname]     - Pings a device on your tailnet or the internet.")
@@ -183,6 +186,36 @@ class ChrisOS:
         print("  date                - Displays the current date.")
         print("-" * 20)
 
+    def get_dir_size(self, path='.'):
+        """Recursively calculates the size of a directory."""
+        total = 0
+        with os.scandir(path) as it:
+            for entry in it:
+                if entry.is_file():
+                    total += entry.stat().st_size
+                elif entry.is_dir():
+                    total += self.get_dir_size(entry.path)
+        return total
+
+    def format_bytes(self, size):
+        """Formats a size in bytes into a human-readable string (KB, MB, GB)."""
+        if size > 1024 * 1024 * 1024:
+            return f"{size / (1024*1024*1024):.2f} GB"
+        if size > 1024 * 1024:
+            return f"{size / (1024*1024):.2f} MB"
+        if size > 1024:
+            return f"{size / 1024:.2f} KB"
+        return f"{size} Bytes"
+
+    def check_storage(self, required_space):
+        """Checks if there is enough free space for a new file or content."""
+        used_size = self.get_dir_size(self.root_path)
+        available_size = self.STORAGE_LIMIT - used_size
+        if required_space > available_size:
+            print(f"Error: Not enough disk space. Required: {self.format_bytes(required_space)}, Available: {self.format_bytes(available_size)}")
+            return False
+        return True
+
     async def get_tailscale_status(self):
         """Async function to fetch and display Tailscale device status."""
         credentials_were_missing = not (self.tailscale_api_key and self.tailscale_tailnet)
@@ -191,12 +224,12 @@ class ChrisOS:
             print("Please provide your Tailscale information. It will be saved for future sessions.")
             self.tailscale_tailnet = input("Enter your tailnet name (e.g., example.com or smiley-cat.ts.net): ").strip()
             self.tailscale_api_key = getpass.getpass("Enter your Tailscale API key (tskey-...): ")
-
+        
         print("\nConnecting to Tailscale API...")
         try:
             async with Tailscale(tailnet=self.tailscale_tailnet, api_key=self.tailscale_api_key) as tailscale:
                 devices = await tailscale.devices()
-
+                
                 if credentials_were_missing:
                     self.save_config()
 
@@ -229,16 +262,16 @@ class ChrisOS:
                     print("Request timed out.")
                 elif delay is None:
                     print(f"Error: Host '{hostname}' unknown.")
-                    break
+                    break 
                 else:
                     latency_ms = round(delay * 1000, 2)
                     print(f"Reply from {hostname}: time={latency_ms}ms")
                 time.sleep(1)
         except Exception as e:
             if "permission denied" in str(e).lower() or "root" in str(e).lower():
-                print("\nError: Permission denied. On some systems, ping requires administrator privileges.")
+                 print("\nError: Permission denied. On some systems, ping requires administrator privileges.")
             else:
-                print(f"An error occurred during ping: {e}")
+                 print(f"An error occurred during ping: {e}")
 
     async def smart_ping(self, hostname):
         """Checks if a host is on the tailnet and pings it, otherwise pings the public internet."""
@@ -252,7 +285,7 @@ class ChrisOS:
                             target_device = device
                             break
             except Exception:
-                pass  # Ignore API errors, we'll just fall back to public ping.
+                pass # Ignore API errors, we'll just fall back to public ping.
 
         if target_device:
             # It's a Tailscale device, use the Tailscale ping.
@@ -281,7 +314,7 @@ class ChrisOS:
         while True:
             prompt = f"\nChrisOS ({self.user}@{self.get_relative_path()})> "
             command_input = input(prompt).strip()
-
+            
             if not command_input: continue
             self.command_history.append(command_input)
 
@@ -293,10 +326,8 @@ class ChrisOS:
                 # --- SYSTEM COMMANDS ---
                 if command == "shutdown": return "SHUTDOWN"
                 if command == "logout": return "LOGOUT"
-                if command == "help":
-                    self.print_help()
-                elif command == "clear":
-                    os.system('cls' if os.name == 'nt' else 'clear')
+                if command == "help": self.print_help()
+                elif command == "clear": os.system('cls' if os.name == 'nt' else 'clear')
                 elif command == "history":
                     for i, cmd in enumerate(self.command_history, 1):
                         print(f"  {i}: {cmd}")
@@ -305,6 +336,14 @@ class ChrisOS:
                     print(f"ChrisOS Version: {self.VERSION}")
                     print(f"System Uptime: {uptime}")
                     print(f"Root Path: {self.root_path}")
+                elif command == "df":
+                    used_size = self.get_dir_size(self.root_path)
+                    available_size = self.STORAGE_LIMIT - used_size
+                    percentage_used = (used_size / self.STORAGE_LIMIT) * 100 if self.STORAGE_LIMIT > 0 else 0
+                    
+                    print("ChrisOS Disk Usage:")
+                    print(f"  {'Filesystem':<15} {'Size':>10} {'Used':>10} {'Avail':>10} {'Use%':>5}")
+                    print(f"  {'ChrisOS_Root':<15} {self.format_bytes(self.STORAGE_LIMIT):>10} {self.format_bytes(used_size):>10} {self.format_bytes(available_size):>10} {f'{percentage_used:.1f}%':>5}")
                 elif command == "neofetch":
                     uptime = str(datetime.timedelta(seconds=int(time.time() - self.start_time)))
                     print("      ___           ___           ___     ")
@@ -326,8 +365,7 @@ class ChrisOS:
                     print("-" * 30)
 
                 # --- USER COMMANDS ---
-                elif command == "whoami":
-                    print(self.user)
+                elif command == "whoami": print(self.user)
                 elif command == "useradd":
                     new_user = input("Enter new username: ").strip()
                     new_pass = getpass.getpass("Enter new password: ").strip()
@@ -337,8 +375,7 @@ class ChrisOS:
                         print(f"User '{new_user}' created.")
                 elif command == "passwd":
                     old_pass = getpass.getpass("Current password: ")
-                    with open(self.users_file, "r") as f:
-                        users = f.readlines()
+                    with open(self.users_file, "r") as f: users = f.readlines()
                     user_found = False
                     for i, line in enumerate(users):
                         stored_user, stored_pass = line.strip().split(":", 1)
@@ -348,8 +385,7 @@ class ChrisOS:
                             new_pass2 = getpass.getpass("Retype new password: ")
                             if new_pass1 == new_pass2:
                                 users[i] = f"{self.user}:{new_pass1}\n"
-                                with open(self.users_file, "w") as f:
-                                    f.writelines(users)
+                                with open(self.users_file, "w") as f: f.writelines(users)
                                 print("Password updated successfully.")
                             else:
                                 print("Passwords do not match.")
@@ -365,49 +401,67 @@ class ChrisOS:
                         item_path = os.path.join(self.current_path, item)
                         item_type = "[DIR]" if os.path.isdir(item_path) else "[FILE]"
                         print(f"  {item_type:<6} {item}")
-                elif command == "pwd":
-                    print(self.get_relative_path())
+                elif command == "pwd": print(self.get_relative_path())
                 elif command == "cd":
                     target = args[0] if args else "~"
                     if target == "~":
                         self.current_path = os.path.join(self.home_path, self.user)
                     else:
                         new_path = os.path.abspath(os.path.join(self.current_path, target))
-                        if not new_path.startswith(self.root_path):
-                            print("Error: Cannot cd outside OS root.")
-                        elif os.path.isdir(new_path):
-                            self.current_path = new_path
-                        else:
-                            print(f"Error: Directory '{target}' not found.")
+                        if not new_path.startswith(self.root_path): print("Error: Cannot cd outside OS root.")
+                        elif os.path.isdir(new_path): self.current_path = new_path
+                        else: print(f"Error: Directory '{target}' not found.")
                 elif command == "cat":
-                    if not args:
-                        print("Usage: cat [filename]")
+                    if not args: print("Usage: cat [filename]")
                     else:
                         file_path = os.path.join(self.current_path, args[0])
                         if os.path.isfile(file_path):
-                            with open(file_path, 'r') as f:
-                                print(f.read(), end="")
-                        else:
-                            print(f"Error: File '{args[0]}' not found.")
+                            with open(file_path, 'r') as f: print(f.read(), end="")
+                        else: print(f"Error: File '{args[0]}' not found.")
+                elif command == "echo":
+                    if '>' in " ".join(args):
+                        parts = " ".join(args).split('>', 1)
+                        text_to_write = parts[0].strip().strip('"')
+                        filename = parts[1].strip()
+                        
+                        file_path = os.path.join(self.current_path, filename)
+                        original_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+                        
+                        new_content = text_to_write + '\n'
+                        new_size = len(new_content.encode('utf-8'))
+                        size_difference = new_size - original_size
+
+                        if self.check_storage(size_difference):
+                            with open(file_path, 'w') as f:
+                                f.write(new_content)
+                            print(f"Wrote to {filename}")
+                    else:
+                        print(" ".join(args))
                 elif command == "edit":
-                    if not args:
-                        print("Usage: edit [filename]")
+                    if not args: print("Usage: edit [filename]")
                     else:
                         file_path = os.path.join(self.current_path, args[0])
+                        original_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+
                         print(f"--- Editing {args[0]} --- (Type ':wq' on a new line to save and exit)")
                         lines = []
                         if os.path.exists(file_path):
-                            with open(file_path, 'r') as f:
-                                lines = [line.rstrip('\n') for line in f.readlines()]
+                            with open(file_path, 'r') as f: lines = [line.rstrip('\n') for line in f.readlines()]
                             for line in lines: print(line)
-
+                        
+                        input_lines = []
                         while True:
                             line = input()
                             if line == ':wq': break
-                            lines.append(line)
-                        with open(file_path, 'w') as f:
-                            f.write('\n'.join(lines))
-                        print("File saved.")
+                            input_lines.append(line)
+                        
+                        new_content = '\n'.join(input_lines)
+                        new_size = len(new_content.encode('utf-8'))
+                        size_difference = new_size - original_size
+
+                        if self.check_storage(size_difference):
+                            with open(file_path, 'w') as f: f.write(new_content)
+                            print("File saved.")
                 elif command == "grep":
                     if len(args) != 2:
                         print("Usage: grep [pattern] [filename]")
@@ -427,59 +481,51 @@ class ChrisOS:
                         else:
                             print(f"Error: File '{filename}' not found.")
                 elif command == "cp":
-                    if len(args) != 2:
-                        print("Usage: cp [source] [destination]")
+                    if len(args) != 2: print("Usage: cp [source] [destination]")
                     else:
                         src = os.path.join(self.current_path, args[0])
                         dest = os.path.join(self.current_path, args[1])
                         if os.path.isfile(src):
-                            shutil.copy(src, dest)
-                            print(f"Copied '{args[0]}' to '{args[1]}'.")
-                        else:
-                            print(f"Error: Source file '{args[0]}' not found.")
+                            required_space = os.path.getsize(src)
+                            if self.check_storage(required_space):
+                                shutil.copy(src, dest)
+                                print(f"Copied '{args[0]}' to '{args[1]}'.")
+                        else: print(f"Error: Source file '{args[0]}' not found.")
                 elif command == "mv":
-                    if len(args) != 2:
-                        print("Usage: mv [source] [destination]")
+                    if len(args) != 2: print("Usage: mv [source] [destination]")
                     else:
                         src = os.path.join(self.current_path, args[0])
                         dest = os.path.join(self.current_path, args[1])
                         shutil.move(src, dest)
                         print(f"Moved '{args[0]}' to '{args[1]}'.")
                 elif command == "mkdir":
-                    if not args:
-                        print("Usage: mkdir [dirname]")
-                    else:
+                    if not args: print("Usage: mkdir [dirname]")
+                    elif self.check_storage(4096): # Reserve a small amount for directory metadata
                         os.mkdir(os.path.join(self.current_path, args[0]))
                         print(f"Directory '{args[0]}' created.")
                 elif command == "touch":
-                    if not args:
-                        print("Usage: touch [filename]")
-                    else:
+                    if not args: print("Usage: touch [filename]")
+                    elif self.check_storage(0):
                         open(os.path.join(self.current_path, args[0]), 'a').close()
                         print(f"File '{args[0]}' created.")
                 elif command == "rm":
-                    if not args:
-                        print("Usage: rm [filename]")
+                    if not args: print("Usage: rm [filename]")
                     else:
                         file_path = os.path.join(self.current_path, args[0])
                         if os.path.isfile(file_path):
                             os.remove(file_path)
                             print(f"File '{args[0]}' removed.")
-                        else:
-                            print(f"Error: '{args[0]}' is not a file.")
+                        else: print(f"Error: '{args[0]}' is not a file.")
                 elif command == "rmdir":
-                    if not args:
-                        print("Usage: rmdir [dirname]")
+                    if not args: print("Usage: rmdir [dirname]")
                     else:
                         dir_path = os.path.join(self.current_path, args[0])
                         if os.path.isdir(dir_path):
                             os.rmdir(dir_path)
                             print(f"Directory '{args[0]}' removed.")
-                        else:
-                            print(f"Error: '{args[0]}' is not a directory.")
+                        else: print(f"Error: '{args[0]}' is not a directory.")
                 elif command == "find":
-                    if not args:
-                        print("Usage: find [filename]")
+                    if not args: print("Usage: find [filename]")
                     else:
                         found = False
                         for root, dirs, files in os.walk(self.current_path):
@@ -488,6 +534,80 @@ class ChrisOS:
                                 result_path = os.path.join(root, args[0])
                                 print(os.path.relpath(result_path, self.current_path))
                         if not found: print(f"File '{args[0]}' not found.")
+                
+                # --- VERSION CONTROL ---
+                elif command == "git":
+                    if not args:
+                        print("Usage: git [init|commit|log]")
+                        continue
+                    
+                    sub_command = args[0]
+                    git_path = os.path.join(self.current_path, ".chrisgit")
+
+                    if sub_command == "init":
+                        if os.path.exists(git_path):
+                            print("Repository already initialized.")
+                        else:
+                            os.makedirs(git_path)
+                            print(f"Initialized empty ChrisOS repository in {self.get_relative_path()}/.chrisgit")
+                    
+                    elif sub_command == "commit":
+                        if not os.path.exists(git_path):
+                            print("Error: Not a git repository. Run 'git init' first.")
+                            continue
+                        
+                        if len(args) > 2 and args[1] == "-m":
+                            message = " ".join(args[2:]).strip('"')
+                            timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                            commit_name = f"{timestamp}_{message.replace(' ', '_')}"
+                            archive_path = os.path.join(git_path, commit_name)
+                            
+                            # Create a temporary directory to archive from
+                            temp_dir = os.path.join(self.root_path, "temp_archive_dir")
+                            os.makedirs(temp_dir, exist_ok=True)
+                            
+                            # Copy everything except .chrisgit to the temp dir
+                            for item in os.listdir(self.current_path):
+                                s_path = os.path.join(self.current_path, item)
+                                d_path = os.path.join(temp_dir, item)
+                                if item != ".chrisgit":
+                                    if os.path.isdir(s_path):
+                                        shutil.copytree(s_path, d_path)
+                                    else:
+                                        shutil.copy2(s_path, d_path)
+
+                            # Create the archive and clean up
+                            shutil.make_archive(archive_path, 'zip', temp_dir)
+                            shutil.rmtree(temp_dir)
+
+                            print(f"Committed changes: {message}")
+                        else:
+                            print("Usage: git commit -m \"your commit message\"")
+
+                    elif sub_command == "log":
+                        if not os.path.exists(git_path):
+                            print("Error: Not a git repository. Run 'git init' first.")
+                            continue
+                        
+                        commits = sorted(os.listdir(git_path), reverse=True)
+                        if not commits:
+                            print("No commits yet.")
+                        else:
+                            for commit_file in commits:
+                                try:
+                                    parts = os.path.splitext(commit_file)[0].split('_', 1)
+                                    timestamp_str = parts[0]
+                                    message = parts[1].replace('_', ' ')
+                                    dt_object = datetime.datetime.strptime(timestamp_str, "%Y%m%d-%H%M%S")
+                                    print(f"commit {commit_file}")
+                                    print(f"Date:   {dt_object.strftime('%a %b %d %H:%M:%S %Y')}")
+                                    print(f"\n\t{message}\n")
+                                except:
+                                    # Ignore files that don't match the format
+                                    pass
+                    else:
+                        print(f"Error: Unknown git command '{sub_command}'.")
+
 
                 # --- NETWORKING COMMANDS ---
                 elif command == "ts-status":
@@ -511,21 +631,18 @@ class ChrisOS:
                         url = args[0]
                         try:
                             print(f"Connecting to {url}...")
-                            response = requests.get(url, allow_redirects=True)
-                            response.raise_for_status()  # Raises an error for bad status codes (4xx or 5xx)
-
-                            parsed_url = urlparse(url)
-                            filename = os.path.basename(parsed_url.path)
-                            if not filename:
-                                filename = "index.html"
-
-                            file_path = os.path.join(self.current_path, filename)
-                            with open(file_path, 'wb') as f:
-                                f.write(response.content)
-
-                            size = len(response.content)
-                            print(f"Saved to '{filename}' ({size} bytes).")
-
+                            with requests.get(url, stream=True) as r:
+                                r.raise_for_status()
+                                size = int(r.headers.get('content-length', 0))
+                                
+                                if self.check_storage(size):
+                                    parsed_url = urlparse(url)
+                                    filename = os.path.basename(parsed_url.path) or "index.html"
+                                    file_path = os.path.join(self.current_path, filename)
+                                    
+                                    with open(file_path, 'wb') as f:
+                                        shutil.copyfileobj(r.raw, f)
+                                    print(f"Saved to '{filename}' ({self.format_bytes(size)}).")
                         except requests.exceptions.RequestException as e:
                             print(f"Error during download: {e}")
 
@@ -544,17 +661,14 @@ class ChrisOS:
                         except requests.exceptions.RequestException as e:
                             print(f"Error fetching weather: {e}")
                 elif command == "run":
-                    if not args or not args[0].endswith(".chr"):
-                        print("Error: Must be a .chr file.")
+                    if not args or not args[0].endswith(".chr"): print("Error: Must be a .chr file.")
                     else:
                         file_path = os.path.join(self.current_path, args[0])
                         if os.path.isfile(file_path):
                             print(f"--- Executing {args[0]} ---")
-                            with open(file_path, 'r') as f:
-                                exec(f.read(), {'__name__': '__main__'})
+                            with open(file_path, 'r') as f: exec(f.read(), {'__name__': '__main__'})
                             print(f"--- Finished executing {args[0]} ---")
-                        else:
-                            print(f"Error: Program file '{args[0]}' not found.")
+                        else: print(f"Error: Program file '{args[0]}' not found.")
                 elif command == "calc":
                     if not args:
                         print("Usage: calc [expression]")
@@ -568,26 +682,22 @@ class ChrisOS:
                             except Exception as e:
                                 print(f"Error in calculation: {e}")
                         else:
-                            print(
-                                "Error: Invalid characters in expression. Only numbers and operators (+-*/) are allowed.")
+                            print("Error: Invalid characters in expression. Only numbers and operators (+-*/) are allowed.")
                 elif command == "cal":
                     now = datetime.datetime.now()
                     print(calendar.month(now.year, now.month))
-                elif command == "time":
-                    print(datetime.datetime.now().strftime('%H:%M:%S'))
-                elif command == "date":
-                    print(datetime.datetime.now().strftime('%Y-%m-%d'))
+                elif command == "time": print(datetime.datetime.now().strftime('%H:%M:%S'))
+                elif command == "date": print(datetime.datetime.now().strftime('%Y-%m-%d'))
                 else:
                     print(f"Error: Command '{command}' not recognized.")
             except Exception as e:
                 print(f"An error occurred: {e}")
 
-
 # --- Main execution ---
 if __name__ == "__main__":
     while True:
         my_os = ChrisOS()
-
+        
         login_successful = not my_os.requires_login
         if my_os.requires_login:
             login_successful = my_os.login()
